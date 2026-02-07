@@ -3,64 +3,48 @@ import pandas as pd
 from datetime import datetime
 import time
 import gspread
-from google.oauth2.service_account import Credentials
-import json
+from oauth2client.service_account import ServiceAccountCredentials
 
-# --- CONFIG BASED ON ---
-SHEET_NAME = "Car_book" 
+# --- CONFIG ---
+SHEET_NAME = "Car_book"  # Aapki sheet ka naam
 
-# --- GOOGLE SHEETS CONNECTION (Fixed) ---
+# --- GOOGLE SHEETS CONNECTION (Secrets Fix) ---
 def get_sheet(tab_name):
     try:
-        # Get credentials from Streamlit secrets
+        # Secrets se data uthana
         creds_dict = dict(st.secrets["gcp_service_account"])
         
-        # Fix private key formatting - handle escaped newlines
-        private_key = creds_dict["private_key"]
-        # Remove any extra spaces and ensure proper formatting
-        private_key = private_key.strip()
+        # PRIVATE KEY FIX: Agar key mein \n ghalat hai to usay theek karo
+        if "private_key" in creds_dict:
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         
-        # Replace escaped newlines if they exist
-        if "\\n" in private_key:
-            private_key = private_key.replace("\\n", "\n")
-        elif "\\\\n" in private_key:
-            private_key = private_key.replace("\\\\n", "\n")
-        
-        # Update the credentials dictionary
-        creds_dict["private_key"] = private_key
-        
-        # Define the scope
-        scope = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive",
-            "https://www.googleapis.com/auth/spreadsheets"
-        ]
-        
-        # Create credentials using ServiceAccountCredentials
-        credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
-        
-        # Authorize gspread client
-        client = gspread.authorize(credentials)
-        
-        # Open the spreadsheet
-        spreadsheet = client.open(SHEET_NAME)
-        
-        # Get the specific worksheet
-        return spreadsheet.worksheet(tab_name)
-        
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        return client.open(SHEET_NAME).worksheet(tab_name)
     except Exception as e:
-        st.error(f"Cloud Connection Failed: {e}")
-        st.error("Please check your Google Sheets API access and credentials.")
+        st.error(f"Connection Error: {e}")
         st.stop()
 
-def get_next_available_row(sheet):
-    """Hamesha Row 6 se check shuru karega"""
-    col_b = sheet.col_values(2)  # ID # Column
-    if len(col_b) < 6:
+def get_next_row(sheet):
+    """Row 6 se shuru kar ke pehli khali row dhoondega"""
+    # Column B (ID#) ki values uthao
+    col_values = sheet.col_values(2)
+    
+    # Row 6 (index 5) se check karna shuru karo
+    # Agar column chota hai aur row 6 exist nahi karti, to 6 return karo
+    if len(col_values) < 6:
         return 6
-    return len(col_b) + 1
+        
+    # Loop chalao row 6 se aagay
+    for i in range(5, len(col_values)):
+        if not col_values[i].strip():  # Agar cell khali hai
+            return i + 1
+            
+    # Agar beech mein koi khali nahi, to end mein add karo
+    return len(col_values) + 1
 
-# --- CSS HACKER LOOK ---
+# --- HACKER UI CSS ---
 st.set_page_config(page_title="Fleet Master Pro", layout="wide")
 st.markdown("""
     <style>
@@ -81,140 +65,162 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- APP FLOW ---
-try:
-    driver_sheet = get_sheet("Driver Data")
-    df_drivers = pd.DataFrame(driver_sheet.get_all_records())
-    driver_info = {str(row['ID#']): {'name': row['Driver Name'], 'car': str(row['Car#'])} for _, row in df_drivers.iterrows()}
-except Exception as e:
-    st.error(f"Failed to load driver data: {e}")
-    driver_info = {}
+# --- APP LOGIC ---
+driver_sheet = get_sheet("Driver Data")
+data = driver_sheet.get_all_records()
+# Driver info dictionary banana
+driver_info = {}
+for row in data:
+    # Ensure keys match exactly with your sheet headers
+    d_id = str(row.get('ID#', '') or row.get('ID', ''))
+    name = row.get('Driver Name', '') or row.get('Name', '')
+    car = str(row.get('Car#', '') or row.get('Car', ''))
+    if d_id:
+        driver_info[d_id] = {'name': name, 'car': car}
 
 st.markdown('<div class="hacker-modal">', unsafe_allow_html=True)
 
-if 'step' not in st.session_state: 
-    st.session_state.step = "SELECT_ID"
+if 'step' not in st.session_state: st.session_state.step = "SELECT_ID"
 
-# STEP 1: IDENTITY
+# STEP 1: SELECT ID
 if st.session_state.step == "SELECT_ID":
-    st.markdown("## > ACCESS_CLOUD_SYSTEM")
-    if not driver_info:
-        st.error("No driver data loaded. Check your connection.")
-    else:
-        cols = st.columns(2)
-        for i, d_id in enumerate(driver_info.keys()):
-            with cols[i % 2]:
-                if st.button(d_id):
-                    st.session_state.u_id = d_id
-                    try:
-                        m_sheet = get_sheet("Management")
-                        all_data = m_sheet.get_all_values()
-                        pending_trip = None
-                        # Scan from Row 6 downwards
-                        for idx, r in enumerate(all_data[5:], start=6):
-                            if len(r) > 14 and str(r[1]) == d_id and "Pending" in str(r[14]):
-                                pending_trip = {"row": idx, "name": r[2], "car": r[3], "start": r[5]}
-                                break
-                        st.session_state.step = "END_PROMPT" if pending_trip else "START_BAL"
-                        if pending_trip: 
-                            st.session_state.p_trip = pending_trip
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error checking trips: {e}")
+    st.markdown("## > SYSTEM_ACCESS")
+    cols = st.columns(2)
+    for i, d_id in enumerate(driver_info.keys()):
+        with cols[i % 2]:
+            if st.button(d_id):
+                st.session_state.u_id = d_id
+                
+                # Check Pending Status
+                m_sheet = get_sheet("Management")  # Tab name check
+                # Management tab spelling "MANAGMENT" hai ya "Management" check kar lein
+                # Code mein "Management" use ho raha hai.
+                
+                all_vals = m_sheet.get_all_values()
+                pending_trip = None
+                
+                # Row 6 se search (index 5)
+                # Column O (Status) is index 14
+                for idx, r in enumerate(all_vals[5:], start=6):
+                    if len(r) > 14:
+                        # Column B is index 1
+                        if str(r[1]) == d_id and "Pending" in str(r[14]):
+                            pending_trip = {
+                                "row": idx, 
+                                "name": r[2], # Col C
+                                "car": r[3],  # Col D
+                                "start": r[5] # Col F (Start ID Amt)
+                            }
+                            break
+                
+                st.session_state.step = "END_PROMPT" if pending_trip else "START_BAL"
+                if pending_trip: st.session_state.p_trip = pending_trip
+                st.rerun()
 
-# --- START FLOW ---
+# --- START TRIP ---
 elif st.session_state.step == "START_BAL":
-    st.markdown(f"### {driver_info.get(st.session_state.u_id, {}).get('name', 'Unknown Driver')}")
-    val = st.number_input("START_AMOUNT:", min_value=0.0, value=None, format="%.2f")
+    st.markdown(f"### {driver_info[st.session_state.u_id]['name']}")
+    val = st.number_input("START_ID_AMOUNT:", min_value=0.0, value=None)
     if val is not None: 
         st.session_state.s_bal = val
         st.session_state.step = "START_OIL"
         st.rerun()
 
 elif st.session_state.step == "START_OIL":
-    val = st.number_input("OIL_KM:", min_value=0, value=None, step=1)
-    if val is not None and st.button("INITIATE_🚀"):
-        try:
+    val = st.number_input("OIL_KM:", min_value=0, value=None)
+    if val is not None:
+        if st.button("START_TRIP 🚀"):
             m_sheet = get_sheet("Management")
-            r = get_next_available_row(m_sheet)  # Ensures Row 6+
-            # Column Order: Sr(1), ID(2), Driver(3), Car(4), Date(5), Start(6), End(7), Oil(8), S_Time(9), E_Time(10), ID_Amt(11), Acc(12), Hand(13), Total(14), Status(15)
-            new_row = [
-                r-5, 
-                st.session_state.u_id, 
-                driver_info.get(st.session_state.u_id, {}).get('name', ''), 
-                driver_info.get(st.session_state.u_id, {}).get('car', ''), 
-                datetime.now().strftime("%m/%d/%Y"),
-                st.session_state.s_bal, 
-                "", 
-                val, 
-                datetime.now().strftime("%I:%M %p"), 
-                "", 
-                "", 
-                "", 
-                "", 
-                "", 
-                "Pending ⏳"
-            ]
-            m_sheet.insert_row(new_row, r, value_input_option='USER_ENTERED')
-            st.success("CLOUD_LOG_SAVED")
+            row_num = get_next_row(m_sheet)
+            
+            # Data Mapping according to
+            # A=1, B=2, C=3, D=4, E=5, F=6, G=7, H=8, I=9, J=10, K=11, L=12, M=13, N=14, O=15
+            
+            # Row number calculation for Serial Number (Column A)
+            sr_no = row_num - 5
+            
+            # Cells update range A to O
+            # Hum cell by cell update karenge taake formatting kharab na ho
+            m_sheet.update_cell(row_num, 1, sr_no) # A: Sr
+            m_sheet.update_cell(row_num, 2, st.session_state.u_id) # B: ID
+            m_sheet.update_cell(row_num, 3, driver_info[st.session_state.u_id]['name']) # C: Driver
+            m_sheet.update_cell(row_num, 4, driver_info[st.session_state.u_id]['car']) # D: Car
+            m_sheet.update_cell(row_num, 5, datetime.now().strftime("%m/%d/%Y")) # E: Date
+            m_sheet.update_cell(row_num, 6, st.session_state.s_bal) # F: Start ID Amt
+            m_sheet.update_cell(row_num, 8, val) # H: Oil (KM)
+            m_sheet.update_cell(row_num, 9, datetime.now().strftime("%I:%M %p")) # I: Start Time
+            m_sheet.update_cell(row_num, 15, "Pending ⏳") # O: Status
+            
+            st.success("TRIP STARTED @ ROW " + str(row_num))
             time.sleep(2)
             del st.session_state.step
             st.rerun()
-        except Exception as e:
-            st.error(f"Failed to save data: {e}")
 
-# --- END FLOW ---
+# --- END TRIP ---
 elif st.session_state.step == "END_PROMPT":
-    if 'p_trip' in st.session_state:
-        st.markdown(f"### {st.session_state.p_trip.get('name', 'Unknown')} Active")
-        if st.button("TERMINATE? 🏁"): 
-            st.session_state.step = "E1"
-            st.rerun()
-    else:
-        st.error("No pending trip found")
-        del st.session_state.step
+    st.markdown(f"### {st.session_state.p_trip['name']} (Active)")
+    if st.button("END_TRIP 🏁"): 
+        st.session_state.step = "E1"
         st.rerun()
 
 elif st.session_state.step == "E1":
-    val = st.number_input("END_ID_AMOUNT:", min_value=0.0, value=None, format="%.2f")
+    val = st.number_input("END_ID_AMOUNT:", min_value=0.0, value=None)
     if val is not None: 
         st.session_state.ew = val
         st.session_state.step = "E2"
         st.rerun()
 
 elif st.session_state.step == "E2":
-    val = st.number_input("CASH_HAND:", min_value=0.0, value=None, format="%.2f")
+    val = st.number_input("CASH_HAND:", min_value=0.0, value=None)
     if val is not None: 
         st.session_state.eh = val
         st.session_state.step = "E3"
         st.rerun()
 
 elif st.session_state.step == "E3":
-    val = st.number_input("MY_ACCOUNT:", min_value=0.0, value=None, format="%.2f")
-    if val is not None and st.button("FINALIZE ✅"):
-        try:
-            start = float(st.session_state.p_trip['start'])
-            amt_id = start - st.session_state.ew
-            total = st.session_state.eh + val - amt_id
+    val = st.number_input("MY_ACCOUNT:", min_value=0.0, value=None)
+    if val is not None:
+        if st.button("FINALIZE & SAVE ✅"):
+            try:
+                start = float(st.session_state.p_trip['start'])
+            except:
+                start = 0.0
+                
+            end_id_val = st.session_state.ew
+            cash_hand = st.session_state.eh
+            my_account = val
+            
+            # Calculation
+            # ID Amount (Col K) = Start (F) - End (G)
+            id_amount = start - end_id_val
+            
+            # Total (Col N) = Cash Hand (M) + My Account (L) - ID Amount (K)
+            # Formula check: Total = (Hand + Bank) - (Start - End)
+            total = cash_hand + my_account - id_amount
             
             m_sheet = get_sheet("Management")
             r = st.session_state.p_trip['row']
             
-            # Precise Updates
-            m_sheet.update_cell(r, 7, st.session_state.ew)  # Col G: End ID Amount
-            m_sheet.update_cell(r, 10, datetime.now().strftime("%I:%M %p"))  # Col J: End Time
-            m_sheet.update_cell(r, 11, amt_id)  # Col K: ID Amount
-            m_sheet.update_cell(r, 12, val)  # Col L: My Account
-            m_sheet.update_cell(r, 13, st.session_state.eh)  # Col M: My Hand
-            m_sheet.update_cell(r, 14, total)  # Col N: Total
-            m_sheet.update_cell(r, 15, "Done ✔")  # Col O: Status
+            # Update End Data
+            m_sheet.update_cell(r, 7, end_id_val) # G: End ID Amt
+            m_sheet.update_cell(r, 10, datetime.now().strftime("%I:%M %p")) # J: End Time
+            m_sheet.update_cell(r, 11, id_amount) # K: ID Amt
+            m_sheet.update_cell(r, 12, my_account) # L: My Account
+            m_sheet.update_cell(r, 13, cash_hand) # M: My Hand
+            m_sheet.update_cell(r, 14, total) # N: Total
+            m_sheet.update_cell(r, 15, "Done ✔") # O: Status
             
             st.balloons()
-            st.markdown(f"<div style='border:1px solid #00ff41; padding:15px;'><h3>TOTAL: {total}</h3></div>", unsafe_allow_html=True)
+            st.markdown(f"""
+                <div style='border:1px solid #00ff41; padding:20px; text-align:left;'>
+                    <h3 style='color:#fff; border-bottom:1px solid #00ff41;'>RECEIPT</h3>
+                    <p>HAND: {cash_hand} | BANK: {my_account}</p>
+                    <p>ID_AMT: {id_amount}</p>
+                    <h2 style='color:#FFFF00;'>TOTAL: {total}</h2>
+                </div>
+            """, unsafe_allow_html=True)
             time.sleep(5)
             del st.session_state.step
             st.rerun()
-        except Exception as e:
-            st.error(f"Failed to update data: {e}")
 
 st.markdown('</div>', unsafe_allow_html=True)
