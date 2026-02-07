@@ -10,15 +10,15 @@ SHEET_NAME = "Fleet Management" # Aapki Google Sheet ka naam bilkul sahi hona ch
 
 # --- GOOGLE SHEETS CONNECTION (Secrets Edition) ---
 def get_sheet(tab_name):
-    # Streamlit Dashboard ke "Secrets" section se data uthana
+    # Streamlit Secrets se data uthana
     creds_dict = st.secrets["gcp_service_account"]
     
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    # File ki bajaye Dictionary (dict) use kar rahe hain
+    # Keyfile name ki bajaye dictionary (dict) use ho rahi hai
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     
-    return client.open(SHEET_NAME).worksheet(tab_name)
+    return client.open("Fleet Management").worksheet(tab_name)
 
 # --- CSS HACKER LOOK (CENTERED) ---
 st.set_page_config(page_title="Fleet Cloud Pro", layout="wide")
@@ -143,3 +143,4 @@ elif st.session_state.step == "E3":
             time.sleep(10); del st.session_state.step; st.rerun()
 
 st.markdown('</div>', unsafe_allow_html=True)
+
