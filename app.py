@@ -6,14 +6,18 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --- CONFIG ---
-SHEET_NAME = "Fleet Management" # Aapki Google Sheet ka naam
-CREDS_FILE = 'credentials.json'
+SHEET_NAME = "Fleet Management" # Aapki Google Sheet ka naam bilkul sahi hona chahiye
 
-# --- GOOGLE SHEETS CONNECTION ---
+# --- GOOGLE SHEETS CONNECTION (Secrets Edition) ---
 def get_sheet(tab_name):
+    # Streamlit Dashboard ke "Secrets" section se data uthana
+    creds_dict = st.secrets["gcp_service_account"]
+    
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, scope)
+    # File ki bajaye Dictionary (dict) use kar rahe hain
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
+    
     return client.open(SHEET_NAME).worksheet(tab_name)
 
 # --- CSS HACKER LOOK (CENTERED) ---
