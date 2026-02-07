@@ -8,7 +8,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # --- CONFIG BASED ON ---
 SHEET_NAME = "Car_book" 
 
-# --- GOOGLE SHEETS CONNECTION ---
+# --- GOOGLE SHEETS CONNECTION (Secrets Fix) ---
 def get_sheet(tab_name):
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
@@ -22,6 +22,13 @@ def get_sheet(tab_name):
     except Exception as e:
         st.error(f"Cloud Connection Failed: {e}")
         st.stop()
+
+def get_next_available_row(sheet):
+    """Hamesha Row 6 se check shuru karega"""
+    col_b = sheet.col_values(2) # ID # Column
+    if len(col_b) < 6:
+        return 6
+    return len(col_b) + 1
 
 # --- CSS HACKER LOOK ---
 st.set_page_config(page_title="Fleet Master Pro", layout="wide")
@@ -64,9 +71,9 @@ if st.session_state.step == "SELECT_ID":
                 m_sheet = get_sheet("Management")
                 all_data = m_sheet.get_all_values()
                 pending_trip = None
-                # Check Row 6+ Column O (15) for Pending
+                # Scan from Row 6 downwards
                 for idx, r in enumerate(all_data[5:], start=6):
-                    if str(r[1]) == d_id and "Pending" in str(r[14]):
+                    if len(r) > 14 and str(r[1]) == d_id and "Pending" in str(r[14]):
                         pending_trip = {"row": idx, "name": r[2], "car": r[3], "start": r[5]}
                         break
                 st.session_state.step = "END_PROMPT" if pending_trip else "START_BAL"
@@ -83,12 +90,12 @@ elif st.session_state.step == "START_OIL":
     val = st.number_input("OIL_KM:", min_value=0, value=None)
     if val and st.button("INITIATE_🚀"):
         m_sheet = get_sheet("Management")
-        r = len(m_sheet.get_all_values()) + 1
-        # Order: Sr, ID, Driver, Car, Date, Start ID, End ID, Oil, Start Time, ...
+        r = get_next_available_row(m_sheet) # Ensures Row 6+
+        # Column Order: Sr(1), ID(2), Driver(3), Car(4), Date(5), Start(6), End(7), Oil(8), S_Time(9), E_Time(10), ID_Amt(11), Acc(12), Hand(13), Total(14), Status(15)
         new_row = [r-5, st.session_state.u_id, driver_info[st.session_state.u_id]['name'], 
                    driver_info[st.session_state.u_id]['car'], datetime.now().strftime("%m/%d/%Y"),
                    st.session_state.s_bal, "", val, datetime.now().strftime("%I:%M %p"), "", "", "", "", "", "Pending ⏳"]
-        m_sheet.append_row(new_row, value_input_option='USER_ENTERED')
+        m_sheet.insert_row(new_row, r, value_input_option='USER_ENTERED')
         st.success("CLOUD_LOG_SAVED"); time.sleep(2); del st.session_state.step; st.rerun()
 
 # --- END FLOW ---
@@ -112,14 +119,14 @@ elif st.session_state.step == "E3":
         total = st.session_state.eh + val - amt_id
         m_sheet = get_sheet("Management")
         r = st.session_state.p_trip['row']
-        # Updates according to columns G(7) to O(15)
-        m_sheet.update_cell(r, 7, st.session_state.ew) # End ID Amount
-        m_sheet.update_cell(r, 10, datetime.now().strftime("%I:%M %p")) # End Time
-        m_sheet.update_cell(r, 11, amt_id) # ID Amount
-        m_sheet.update_cell(r, 12, val) # My Account
-        m_sheet.update_cell(r, 13, st.session_state.eh) # My Hand
-        m_sheet.update_cell(r, 14, total) # Total
-        m_sheet.update_cell(r, 15, "Done ✔") # Status
+        # Precise Updates
+        m_sheet.update_cell(r, 7, st.session_state.ew) # Col G: End ID Amount
+        m_sheet.update_cell(r, 10, datetime.now().strftime("%I:%M %p")) # Col J: End Time
+        m_sheet.update_cell(r, 11, amt_id) # Col K: ID Amount
+        m_sheet.update_cell(r, 12, val) # Col L: My Account
+        m_sheet.update_cell(r, 13, st.session_state.eh) # Col M: My Hand
+        m_sheet.update_cell(r, 14, total) # Col N: Total
+        m_sheet.update_cell(r, 15, "Done ✔") # Col O: Status
         
         st.balloons()
         st.markdown(f"<div style='border:1px solid #00ff41; padding:15px;'><h3>TOTAL: {total}</h3></div>", unsafe_allow_html=True)
