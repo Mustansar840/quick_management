@@ -24,31 +24,27 @@ def get_sheet(tab_name):
         st.error(f"Connection Error: {e}")
         st.stop()
 
-# --- HELPER: GET LAST WALLET AMOUNT (Logic #1 Fix) ---
+# --- HELPER: GET LAST WALLET AMOUNT (Auto-Fill Logic) ---
 def get_last_wallet(driver_id, sheet_data):
-    # Data Row 6 se start hota hai. Hum check karenge last entry kya thi.
-    last_val = 0.0
-    # Sheet data (list of lists) ko reverse mein check karte hain taake latest pehle mile
+    # Data Row 6 se start hota hai. Reverse check karenge taake latest entry mile.
     for row in reversed(sheet_data[5:]): 
         # Column B (index 1) ID hai, Column G (index 6) End ID Amount hai
-        if len(row) > 6 and str(row[1]) == str(driver_id):
+        if len(row) > 6 and str(row[1]).strip() == str(driver_id).strip():
             try:
-                # Agar value khali hai ya text hai to ignore karo
                 val = str(row[6]).replace(',', '').strip()
                 if val:
-                    last_val = float(val)
-                    return last_val
+                    return float(val)
             except:
                 continue
     return 0.0
 
-# --- HELPER: GET TOTALS FOR BANNER (Logic #3 Fix) ---
+# --- HELPER: GET TOTALS FOR BANNER ---
 def get_totals(sheet_data):
     stats = {"9296": 0, "7772": 0} # Parwaiz, Usman IDs
     for row in sheet_data[5:]: # Row 6 se data
-        # Column B (Index 1) = ID, Column N (Index 13) = Total, Column O (Index 14) = Status
+        # Column B (1) = ID, Column N (13) = Total, Column O (14) = Status
         if len(row) > 14:
-            d_id = str(row[1])
+            d_id = str(row[1]).strip()
             status = str(row[14])
             if d_id in stats and "Done" in status:
                 try:
@@ -151,17 +147,17 @@ except Exception as e:
     st.error("Data Load Error. Check Google Sheet Columns.")
     st.stop()
 
-# 2. TOP BANNER DISPLAY
+# 2. TOP BANNER DISPLAY (Totals)
 st.markdown(f"""
     <div class="top-banner">
-        <div style="text-align:center;">
-            <div style="color:#92D050; font-size:12px;">PARWAIZ</div>
-            <div style="font-size:24px; font-weight:bold;">{totals['9296']}</div>
+        <div style="border:1px solid #00ff41; padding:10px; border-radius:50%; width:80px; height:80px; display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:12px;">
+            <span style="color:#92D050;">PARWAIZ</span>
+            <b style="font-size:16px;">{totals['9296']}</b>
         </div>
         <div style="font-size:30px;">⚡</div>
-        <div style="text-align:center;">
-            <div style="color:#92D050; font-size:12px;">USMAN</div>
-            <div style="font-size:24px; font-weight:bold;">{totals['7772']}</div>
+        <div style="border:1px solid #00ff41; padding:10px; border-radius:50%; width:80px; height:80px; display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:12px;">
+            <span style="color:#92D050;">USMAN</span>
+            <b style="font-size:16px;">{totals['7772']}</b>
         </div>
     </div>
 """, unsafe_allow_html=True)
@@ -169,25 +165,25 @@ st.markdown(f"""
 # 3. STATE MANAGEMENT
 if 'step' not in st.session_state: st.session_state.step = "SELECT_ID"
 
-# 4. INFO BOX
+# 4. INFO BOX (Status Banner)
 if st.session_state.step == "SELECT_ID":
     st.markdown('<div class="info-box">> SYSTEM_READY<br>SELECT_IDENTITY...</div>', unsafe_allow_html=True)
 elif "u_id" in st.session_state:
     u_name = driver_info[st.session_state.u_id]['name']
     u_car = driver_info[st.session_state.u_id]['car']
-    st.markdown(f'<div class="info-box">USER: {u_name}<br>CAR: {u_car}</div>', unsafe_allow_html=True)
+    status_msg = "BUSY_SESSION" if "END" in st.session_state.step else "READY_FOR_START"
+    st.markdown(f'<div class="info-box">USER: {u_name} | CAR: {u_car}<br>STATUS: {status_msg}</div>', unsafe_allow_html=True)
 
 # --- STEP 1: SELECT ID ---
 if st.session_state.step == "SELECT_ID":
     cols = st.columns(3)
-    # Dynamic Buttons based on Driver Sheet
     keys = list(driver_info.keys())
     for i, d_id in enumerate(keys):
         with cols[i % 3]:
             if st.button(d_id):
                 st.session_state.u_id = d_id
                 
-                # Check Pending
+                # Check Pending Trip
                 pending = None
                 for idx, r in enumerate(all_vals[5:], start=6):
                     if len(r) > 14 and str(r[1]) == d_id and "Pending" in str(r[14]):
@@ -198,7 +194,7 @@ if st.session_state.step == "SELECT_ID":
                     st.session_state.p_trip = pending
                     st.session_state.step = "END_PROMPT"
                 else:
-                    # Logic #1: Fetch Last Wallet for Start Amount
+                    # Logic #1: Fetch Last Wallet for Auto-Fill
                     last_wallet = get_last_wallet(d_id, all_vals)
                     st.session_state.suggested_start = last_wallet
                     st.session_state.step = "START_BAL"
@@ -210,7 +206,6 @@ elif st.session_state.step == "START_BAL":
     def_val = st.session_state.get('suggested_start', 0.0)
     val = st.number_input("START ID AMOUNT:", min_value=0.0, value=float(def_val))
     
-    # Next button logic
     if st.button("NEXT >>"):
         st.session_state.s_bal = val
         st.session_state.step = "START_OIL"
