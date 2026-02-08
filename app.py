@@ -8,7 +8,6 @@ from datetime import datetime
 SHEET_NAME = "Car_book"
 
 # --- CACHED CONNECTION (SPEED BOOSTER) ---
-# Ye function data ko memory mein save rakhega taake har click par download na karna pare
 @st.cache_resource
 def get_client():
     try:
@@ -25,8 +24,8 @@ def get_client():
 def get_sheet(client, tab_name):
     return client.open(SHEET_NAME).worksheet(tab_name)
 
-# --- DATA LOADER (CACHED) ---
-@st.cache_data(ttl=10) # Data har 10 second baad refresh hoga automatically
+# --- DATA LOADER (UPDATED FOR CAR NUMBER) ---
+@st.cache_data(ttl=5) # 5 Second cache for speed + freshness
 def load_all_data():
     client = get_client()
     
@@ -36,12 +35,15 @@ def load_all_data():
     
     drivers = {}
     for r in d_records:
-        # Columns ko safely dhoondna (Car, Car#, Car No sab check karega)
-        d_id = str(r.get('ID#') or r.get('ID') or '').strip()
-        name = str(r.get('Driver Name') or r.get('Name') or '').strip()
+        # ID Column Check
+        d_id = str(r.get('ID#') or r.get('ID') or r.get('id') or '').strip()
         
-        # Car column finder
-        car = str(r.get('Car#') or r.get('Car') or r.get('Car No') or r.get('Vehicle') or '').strip()
+        # Name Column Check
+        name = str(r.get('Driver Name') or r.get('Name') or r.get('name') or '').strip()
+        
+        # --- CAR NUMBER FIX ---
+        # Aapki sheet mein "Car Number" hai, hum sab check kar lenge
+        car = str(r.get('Car Number') or r.get('Car#') or r.get('Car') or r.get('Vehicle') or '').strip()
         
         if d_id:
             drivers[d_id] = {'name': name, 'car': car}
@@ -59,7 +61,7 @@ def get_last_wallet(driver_id, m_data):
         if len(row) > 6 and str(row[1]).strip() == str(driver_id).strip():
             try:
                 val = str(row[6]).replace(',', '').strip() # Col G (End ID Amount)
-                if val: return val # Return as string for display
+                if val: return val
             except: continue
     return "0"
 
@@ -77,10 +79,7 @@ def get_totals(m_data, driver_ids):
     return stats
 
 def get_next_row_index(m_data):
-    # Local checking of cached data (Fast)
-    # Row count based on ID column (Index 1)
     current_len = len(m_data)
-    # Check trailing empty rows in cache
     for i in range(5, current_len):
         if not m_data[i][1].strip(): # If ID column is empty
             return i + 1
@@ -100,6 +99,10 @@ st.markdown("""
         background: #111; color: #fff;
     }
     
+    /* Active Red Status */
+    .status-active { color: #ff4444; border: 1px solid #ff4444; padding: 10px; font-weight: bold; text-align: center; margin-bottom: 10px; }
+    .status-ready { color: #00ff41; border: 1px solid #00ff41; padding: 10px; text-align: center; margin-bottom: 10px; }
+
     /* Input Fields - Empty & Clean */
     input { background: #111 !important; color: #fff !important; border: 1px solid #333 !important; text-align: center; font-size: 20px !important; }
     
@@ -111,7 +114,7 @@ st.markdown("""
     .stButton > button:hover { background: #00ff41; color: #000; }
     
     /* Info Helpers */
-    .last-val-text { text-align: center; color: #888; font-size: 12px; margin-bottom: 5px; }
+    .last-val-text { text-align: center; color: #888; font-size: 14px; margin-bottom: 5px; }
     
     #MainMenu, footer, header {visibility: hidden;}
     .block-container {padding-top: 1rem;}
@@ -120,7 +123,7 @@ st.markdown("""
 
 # --- MAIN APP ---
 
-# 1. Load Data (Fast Cache)
+# 1. Load Data
 try:
     driver_info, m_data = load_all_data()
     totals = get_totals(m_data, list(driver_info.keys()))
@@ -151,7 +154,7 @@ if st.session_state.step == "SELECT_ID":
             if st.button(d_id):
                 st.session_state.u_id = d_id
                 
-                # Check Pending (Using Cached Data for Speed)
+                # Check Pending
                 pending = None
                 for idx, r in enumerate(m_data[5:], start=6):
                     if len(r) > 14 and str(r[1]) == d_id and "Pending" in str(r[14]):
@@ -162,60 +165,70 @@ if st.session_state.step == "SELECT_ID":
                     st.session_state.p_trip = pending
                     st.session_state.step = "END_PROMPT"
                 else:
-                    # Get Last Wallet Value (Just for display)
+                    # Get Last Wallet Value (Just for hint)
                     st.session_state.last_closed = get_last_wallet(d_id, m_data)
                     st.session_state.step = "START_TRIP"
                 st.rerun()
 
 elif st.session_state.step == "START_TRIP":
     u = driver_info[st.session_state.u_id]
-    st.markdown(f"<div style='text-align:center; margin-bottom:20px;'>USER: <b>{u['name']}</b> | CAR: <b>{u['car']}</b></div>", unsafe_allow_html=True)
     
-    # Hint Text (Value input mein nahi hoga, bas upar likha hoga)
-    st.markdown(f"<div class='last-val-text'>Last Closing Balance: <b>{st.session_state.last_closed}</b></div>", unsafe_allow_html=True)
+    # Display Info
+    st.markdown(f"""
+        <div class='status-ready'>
+            STARTING NEW SESSION<br>
+            USER: {u['name']} | CAR: {u['car']}
+        </div>
+    """, unsafe_allow_html=True)
     
-    # Inputs (Value = None rakha hai taake khali ho)
-    s_amt = st.number_input("START ID AMOUNT", value=None, placeholder="Enter Amount")
-    oil = st.number_input("OIL (KM)", value=None, placeholder="Enter Oil")
+    # Hint Text (Input Box Khali Hoga)
+    st.markdown(f"<div class='last-val-text'>Last Closing Balance was: <b style='color:#fff'>{st.session_state.last_closed}</b></div>", unsafe_allow_html=True)
+    
+    # Inputs (Value = None -> Empty)
+    s_amt = st.number_input("START ID AMOUNT", value=None, placeholder="Enter Start Amount")
+    oil = st.number_input("OIL (KM)", value=None, placeholder="Enter Oil KM")
 
     if st.button("START SESSION 🚀"):
         if s_amt is not None:
-            # Prepare Data
             oil_val = oil if oil is not None else 0
             
-            # Find next row
-            # Note: Cache might be slightly old, so we re-fetch sheet object to write securely
             client = get_client()
             sheet = get_sheet(client, "Management")
-            
-            # Use append_row for safety or calculation
-            # But to stick to your format (Row 6 start), let's find index carefully
-            # We assume cache index + verify
             r_idx = get_next_row_index(m_data) 
             
+            # Car number 'u['car']' ab sahi pass hoga
             row_data = [
                 r_idx-5, st.session_state.u_id, u['name'], u['car'],
                 datetime.now().strftime("%m/%d/%Y"), s_amt, "", oil_val,
                 datetime.now().strftime("%I:%M %p"), "", "", "", "", "", "Pending ⏳"
             ]
             
-            # Update specific row
             sheet.update(range_name=f"A{r_idx}:O{r_idx}", values=[row_data])
             
-            st.cache_data.clear() # Clear cache taake naya data agli baar load ho
+            st.cache_data.clear()
             st.success("Started!"); st.session_state.step = "SELECT_ID"; st.rerun()
         else:
             st.warning("Start Amount Required")
 
 elif st.session_state.step == "END_PROMPT":
     trip = st.session_state.p_trip
-    st.markdown(f"<div style='text-align:center; padding:20px; border:1px solid #00ff41;'>TRIP ACTIVE: {trip['name']} ({trip['car']})</div>", unsafe_allow_html=True)
+    # RED ALERT FOR ACTIVE TRIP
+    st.markdown(f"""
+        <div class='status-active'>
+            ⚠️ TRIP ACTIVE ⚠️<br>
+            {trip['name']} ({trip['car']})
+        </div>
+    """, unsafe_allow_html=True)
+    
     if st.button("END SESSION 🏁"): st.session_state.step = "END_FORM"; st.rerun()
 
 elif st.session_state.step == "END_FORM":
-    e_amt = st.number_input("END ID AMOUNT", value=None)
-    cash = st.number_input("CASH IN HAND", value=None)
-    bank = st.number_input("BANK DEPOSIT", value=None)
+    u = driver_info[st.session_state.u_id]
+    st.markdown(f"<div style='text-align:center; margin-bottom:10px;'>End Session for: <b>{u['name']}</b></div>", unsafe_allow_html=True)
+
+    e_amt = st.number_input("END ID AMOUNT", value=None, placeholder="Enter End Amount")
+    cash = st.number_input("CASH IN HAND", value=None, placeholder="Enter Cash")
+    bank = st.number_input("BANK DEPOSIT", value=None, placeholder="Enter Bank")
 
     if st.button("SAVE & FINISH ✅"):
         if e_amt is not None and cash is not None and bank is not None:
@@ -223,7 +236,6 @@ elif st.session_state.step == "END_FORM":
             id_cost = start - e_amt
             total = cash + bank - id_cost
             
-            # Save to Cloud
             client = get_client()
             sheet = get_sheet(client, "Management")
             r = st.session_state.p_trip['row']
@@ -240,7 +252,7 @@ elif st.session_state.step == "END_FORM":
             sheet.batch_update(updates)
             
             st.session_state.res = {"h": cash, "b": bank, "id": id_cost, "t": total}
-            st.cache_data.clear() # Clear cache for fresh totals next time
+            st.cache_data.clear()
             st.session_state.step = "RECEIPT"
             st.rerun()
         else:
