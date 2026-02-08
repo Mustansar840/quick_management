@@ -131,6 +131,9 @@ st.markdown("""
     div[data-testid="stButton"] > button[kind="primary"]:hover {
         background: #ff4444 !important; color: #000 !important;
     }
+
+    /* BACK BUTTON (Small) */
+    .back-btn { margin-bottom: 10px; }
     
     /* Info Helpers */
     .last-val-text { text-align: center; color: #888; font-size: 14px; margin-bottom: 5px; }
@@ -166,60 +169,80 @@ st.markdown(f'<div class="top-banner">{circles_html}</div>', unsafe_allow_html=T
 # --- SESSION HANDLING ---
 if 'step' not in st.session_state: st.session_state.step = "SELECT_ID"
 
-# 3. Steps
+# 3. Steps Logic
+
+# --- HOME SCREEN: SELECT DRIVER ---
 if st.session_state.step == "SELECT_ID":
     st.markdown("<h3 style='text-align:center'>SELECT DRIVER</h3>", unsafe_allow_html=True)
     
-    # Grid of Drivers
+    # Combine Drivers + "ADD" button in one list
+    all_keys = list(driver_info.keys())
+    all_keys.append("ADD_NEW_DRIVER") # Fake ID for the Add button
+    
     cols = st.columns(3)
-    for i, d_id in enumerate(driver_info.keys()):
+    for i, d_id in enumerate(all_keys):
         with cols[i % 3]:
-            # RED BORDER LOGIC:
-            # Agar driver pending hai to hum `type="primary"` use karenge jo CSS mein RED defined hai
-            # Agar free hai to `type="secondary"` jo GREEN defined hai
+            # --- Logic for ADD Button ---
+            if d_id == "ADD_NEW_DRIVER":
+                if st.button("➕ ADD", key="btn_add_new"):
+                    st.session_state.step = "ADD_DRIVER_PAGE"
+                    st.rerun()
             
-            is_active = d_id in pending_drivers
-            btn_type = "primary" if is_active else "secondary"
-            btn_label = f"{d_id}" 
-            
-            if st.button(btn_label, type=btn_type, key=f"btn_{d_id}"):
-                st.session_state.u_id = d_id
+            # --- Logic for Driver Buttons ---
+            else:
+                is_active = d_id in pending_drivers
+                btn_type = "primary" if is_active else "secondary"
+                btn_label = f"{d_id}"
                 
-                if is_active:
-                    st.session_state.p_trip = pending_drivers[d_id]
-                    st.session_state.step = "END_PROMPT"
-                else:
-                    st.session_state.last_closed = get_last_wallet(d_id, m_data)
-                    st.session_state.step = "START_TRIP"
-                st.rerun()
+                if st.button(btn_label, type=btn_type, key=f"btn_{d_id}"):
+                    st.session_state.u_id = d_id
+                    if is_active:
+                        st.session_state.p_trip = pending_drivers[d_id]
+                        st.session_state.step = "END_PROMPT"
+                    else:
+                        st.session_state.last_closed = get_last_wallet(d_id, m_data)
+                        st.session_state.step = "START_TRIP"
+                    st.rerun()
 
-    # --- ADD NEW DRIVER SECTION ---
-    st.markdown("---")
-    with st.expander("➕ ADD NEW DRIVER"):
-        new_id = st.text_input("New Driver ID", placeholder="e.g 1234")
-        new_name = st.text_input("Driver Name", placeholder="Name")
-        new_car = st.text_input("Car Number", placeholder="Car No")
-        
-        if st.button("SAVE NEW DRIVER"):
+# --- PAGE: ADD NEW DRIVER ---
+elif st.session_state.step == "ADD_DRIVER_PAGE":
+    st.markdown("<h3 style='text-align:center'>ADD NEW DRIVER</h3>", unsafe_allow_html=True)
+    
+    new_id = st.text_input("New Driver ID", placeholder="e.g 1234")
+    new_name = st.text_input("Driver Name", placeholder="Name")
+    new_car = st.text_input("Car Number", placeholder="Car No")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("⬅️ BACK"):
+            st.session_state.step = "SELECT_ID"
+            st.rerun()
+    with col2:
+        if st.button("SAVE ✅"):
             if new_id and new_name and new_car:
                 try:
                     client = get_client()
                     d_sheet = get_sheet(client, "Driver Data")
-                    # Append to Driver Data Sheet
                     d_sheet.append_row([new_id, new_name, new_car])
                     st.success(f"Driver {new_name} Added!")
-                    st.cache_data.clear() # Clear cache taake foran list mein show ho
+                    st.cache_data.clear()
                     time.sleep(1)
+                    st.session_state.step = "SELECT_ID"
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Error saving: {e}")
+                    st.error(f"Error: {e}")
             else:
                 st.warning("All fields required")
 
-
+# --- PAGE: START TRIP ---
 elif st.session_state.step == "START_TRIP":
     u = driver_info[st.session_state.u_id]
     
+    # Back Button
+    if st.button("⬅️ BACK"):
+        st.session_state.step = "SELECT_ID"
+        st.rerun()
+
     st.markdown(f"""
         <div style='text-align:center; border:1px solid #00ff41; padding:10px; margin-bottom:10px;'>
             STARTING SESSION<br>
@@ -253,10 +276,16 @@ elif st.session_state.step == "START_TRIP":
         else:
             st.warning("Start Amount Required")
 
+# --- PAGE: END PROMPT ---
 elif st.session_state.step == "END_PROMPT":
     trip = st.session_state.p_trip
     u = driver_info[st.session_state.u_id]
     
+    # Back Button (Goes back to selection)
+    if st.button("⬅️ BACK"):
+        st.session_state.step = "SELECT_ID"
+        st.rerun()
+        
     st.markdown(f"""
         <div class='active-trip-box'>
             <h3>⚠️ TRIP ACTIVE ⚠️</h3>
@@ -268,8 +297,15 @@ elif st.session_state.step == "END_PROMPT":
     
     if st.button("END SESSION 🏁"): st.session_state.step = "END_FORM"; st.rerun()
 
+# --- PAGE: END FORM ---
 elif st.session_state.step == "END_FORM":
     u = driver_info[st.session_state.u_id]
+    
+    # Back Button (Goes back to Active Trip screen)
+    if st.button("⬅️ BACK"):
+        st.session_state.step = "END_PROMPT"
+        st.rerun()
+        
     st.markdown(f"<h4 style='text-align:center'>Closing: {u['name']}</h4>", unsafe_allow_html=True)
 
     e_amt = st.number_input("END ID AMOUNT", value=None, placeholder="Enter Amount")
@@ -304,6 +340,7 @@ elif st.session_state.step == "END_FORM":
         else:
             st.warning("Fill all fields")
 
+# --- PAGE: RECEIPT ---
 elif st.session_state.step == "RECEIPT":
     res = st.session_state.res
     u = driver_info[st.session_state.u_id]
