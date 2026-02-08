@@ -7,7 +7,7 @@ from datetime import datetime
 # --- CONFIG ---
 SHEET_NAME = "Car_book"
 
-# --- CACHED CONNECTION (SPEED BOOSTER) ---
+# --- CACHED CONNECTION ---
 @st.cache_resource
 def get_client():
     try:
@@ -24,43 +24,54 @@ def get_client():
 def get_sheet(client, tab_name):
     return client.open(SHEET_NAME).worksheet(tab_name)
 
-# --- DATA LOADER (UPDATED FOR CAR NUMBER) ---
-@st.cache_data(ttl=5) # 5 Second cache for speed + freshness
+# --- DATA LOADER ---
+@st.cache_data(ttl=5)
 def load_all_data():
     client = get_client()
     
-    # 1. Driver Data
+    # 1. Driver Data Load
     d_sheet = get_sheet(client, "Driver Data")
     d_records = d_sheet.get_all_records()
     
     drivers = {}
     for r in d_records:
-        # ID Column Check
+        # Columns handling
         d_id = str(r.get('ID#') or r.get('ID') or r.get('id') or '').strip()
-        
-        # Name Column Check
-        name = str(r.get('Driver Name') or r.get('Name') or r.get('name') or '').strip()
-        
-        # --- CAR NUMBER FIX ---
-        # Aapki sheet mein "Car Number" hai, hum sab check kar lenge
-        car = str(r.get('Car Number') or r.get('Car#') or r.get('Car') or r.get('Vehicle') or '').strip()
+        name = str(r.get('Driver Name') or r.get('Name') or '').strip()
+        # Specific check for "Car Number" as per your sheet
+        car = str(r.get('Car Number') or r.get('Car#') or r.get('Car') or '').strip()
         
         if d_id:
             drivers[d_id] = {'name': name, 'car': car}
             
-    # 2. Management Data
+    # 2. Management Data Load
     m_sheet = get_sheet(client, "Management")
     m_data = m_sheet.get_all_values()
     
     return drivers, m_data
 
-# --- LOGIC FUNCTIONS ---
+# --- LOGIC HELPER FUNCTIONS ---
+def get_pending_status(m_data, driver_ids):
+    # Check kon kon pending hai
+    pending_list = {}
+    for idx, row in enumerate(m_data[5:], start=6): # Row 6 se data start
+        if len(row) > 14:
+            d_id = str(row[1]).strip()
+            status = str(row[14])
+            if "Pending" in status:
+                pending_list[d_id] = {
+                    "row": idx,
+                    "name": row[2],
+                    "car": row[3],
+                    "start": row[5] # Col F
+                }
+    return pending_list
+
 def get_last_wallet(driver_id, m_data):
-    # Reverse loop for latest entry
     for row in reversed(m_data[5:]): 
         if len(row) > 6 and str(row[1]).strip() == str(driver_id).strip():
             try:
-                val = str(row[6]).replace(',', '').strip() # Col G (End ID Amount)
+                val = str(row[6]).replace(',', '').strip()
                 if val: return val
             except: continue
     return "0"
@@ -78,14 +89,20 @@ def get_totals(m_data, driver_ids):
                 except: pass
     return stats
 
-def get_next_row_index(m_data):
-    current_len = len(m_data)
-    for i in range(5, current_len):
-        if not m_data[i][1].strip(): # If ID column is empty
-            return i + 1
-    return current_len + 1
+def get_next_sr_and_row(m_data):
+    # Find last Sr# to continue numbering correctly
+    max_sr = 0
+    last_row_idx = 5 # Header is at index 4 (Row 5), so data starts index 5
+    
+    for i, row in enumerate(m_data[5:], start=6):
+        if row[0].strip().isdigit():
+            max_sr = max(max_sr, int(row[0]))
+        if row[1].strip(): # If ID column has data
+            last_row_idx = i
+            
+    return max_sr + 1, last_row_idx + 1
 
-# --- FAST CSS ---
+# --- CSS STYLING ---
 st.set_page_config(page_title="Fleet Fast", layout="wide")
 st.markdown("""
     <style>
@@ -99,22 +116,19 @@ st.markdown("""
         background: #111; color: #fff;
     }
     
-    /* Active Red Status */
-    .status-active { color: #ff4444; border: 1px solid #ff4444; padding: 10px; font-weight: bold; text-align: center; margin-bottom: 10px; }
-    .status-ready { color: #00ff41; border: 1px solid #00ff41; padding: 10px; text-align: center; margin-bottom: 10px; }
-
-    /* Input Fields - Empty & Clean */
+    /* Input Fields */
     input { background: #111 !important; color: #fff !important; border: 1px solid #333 !important; text-align: center; font-size: 20px !important; }
     
     /* Buttons */
     .stButton > button {
         width: 100%; border: 1px solid #00ff41; background: #000; color: #00ff41;
-        font-weight: bold; padding: 15px; font-size: 18px; cursor: pointer;
+        font-weight: bold; padding: 15px; font-size: 18px;
     }
     .stButton > button:hover { background: #00ff41; color: #000; }
     
     /* Info Helpers */
     .last-val-text { text-align: center; color: #888; font-size: 14px; margin-bottom: 5px; }
+    .active-trip-box { border: 2px solid #ff4444; padding: 20px; text-align: center; color: #ff4444; border-radius: 10px; margin-bottom: 20px; }
     
     #MainMenu, footer, header {visibility: hidden;}
     .block-container {padding-top: 1rem;}
@@ -127,6 +141,7 @@ st.markdown("""
 try:
     driver_info, m_data = load_all_data()
     totals = get_totals(m_data, list(driver_info.keys()))
+    pending_drivers = get_pending_status(m_data, list(driver_info.keys()))
 except Exception as e:
     st.error("Data loading failed. Refresh page."); st.stop()
 
@@ -148,24 +163,25 @@ if 'step' not in st.session_state: st.session_state.step = "SELECT_ID"
 # 3. Steps
 if st.session_state.step == "SELECT_ID":
     st.markdown("<h3 style='text-align:center'>SELECT DRIVER</h3>", unsafe_allow_html=True)
+    
+    # Separate Active vs Available for better visibility
     cols = st.columns(3)
     for i, d_id in enumerate(driver_info.keys()):
         with cols[i % 3]:
-            if st.button(d_id):
+            # Button Text Logic
+            if d_id in pending_drivers:
+                btn_label = f"{d_id} 🔴" # Active Indicator
+                # Red styling hack using help text to identify or just reliance on label
+            else:
+                btn_label = d_id
+            
+            if st.button(btn_label):
                 st.session_state.u_id = d_id
                 
-                # Check Pending
-                pending = None
-                for idx, r in enumerate(m_data[5:], start=6):
-                    if len(r) > 14 and str(r[1]) == d_id and "Pending" in str(r[14]):
-                        pending = {"row": idx, "name": r[2], "car": r[3], "start": r[5]}
-                        break
-                
-                if pending:
-                    st.session_state.p_trip = pending
+                if d_id in pending_drivers:
+                    st.session_state.p_trip = pending_drivers[d_id]
                     st.session_state.step = "END_PROMPT"
                 else:
-                    # Get Last Wallet Value (Just for hint)
                     st.session_state.last_closed = get_last_wallet(d_id, m_data)
                     st.session_state.step = "START_TRIP"
                 st.rerun()
@@ -173,18 +189,16 @@ if st.session_state.step == "SELECT_ID":
 elif st.session_state.step == "START_TRIP":
     u = driver_info[st.session_state.u_id]
     
-    # Display Info
     st.markdown(f"""
-        <div class='status-ready'>
-            STARTING NEW SESSION<br>
-            USER: {u['name']} | CAR: {u['car']}
+        <div style='text-align:center; border:1px solid #00ff41; padding:10px; margin-bottom:10px;'>
+            STARTING SESSION<br>
+            <span style="font-size:20px; color:#fff">{u['name']}</span><br>
+            <span style="color:#aaa">Car: {u['car']}</span>
         </div>
     """, unsafe_allow_html=True)
     
-    # Hint Text (Input Box Khali Hoga)
-    st.markdown(f"<div class='last-val-text'>Last Closing Balance was: <b style='color:#fff'>{st.session_state.last_closed}</b></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='last-val-text'>Last Closing: <b>{st.session_state.last_closed}</b></div>", unsafe_allow_html=True)
     
-    # Inputs (Value = None -> Empty)
     s_amt = st.number_input("START ID AMOUNT", value=None, placeholder="Enter Start Amount")
     oil = st.number_input("OIL (KM)", value=None, placeholder="Enter Oil KM")
 
@@ -194,17 +208,19 @@ elif st.session_state.step == "START_TRIP":
             
             client = get_client()
             sheet = get_sheet(client, "Management")
-            r_idx = get_next_row_index(m_data) 
             
-            # Car number 'u['car']' ab sahi pass hoga
+            # Correct Sr# and Row Index
+            next_sr, r_idx = get_next_sr_and_row(m_data)
+            
+            # Row Structure
+            # A=Sr, B=ID, C=Driver, D=Car, E=Date, F=StartID, G=EndID, H=Oil, I=StartT, J=EndT, K=IDAmt, L=MyAcc, M=Hand, N=Total, O=Status
             row_data = [
-                r_idx-5, st.session_state.u_id, u['name'], u['car'],
+                next_sr, st.session_state.u_id, u['name'], u['car'],
                 datetime.now().strftime("%m/%d/%Y"), s_amt, "", oil_val,
                 datetime.now().strftime("%I:%M %p"), "", "", "", "", "", "Pending ⏳"
             ]
             
             sheet.update(range_name=f"A{r_idx}:O{r_idx}", values=[row_data])
-            
             st.cache_data.clear()
             st.success("Started!"); st.session_state.step = "SELECT_ID"; st.rerun()
         else:
@@ -212,11 +228,14 @@ elif st.session_state.step == "START_TRIP":
 
 elif st.session_state.step == "END_PROMPT":
     trip = st.session_state.p_trip
-    # RED ALERT FOR ACTIVE TRIP
+    u = driver_info[st.session_state.u_id]
+    
     st.markdown(f"""
-        <div class='status-active'>
-            ⚠️ TRIP ACTIVE ⚠️<br>
-            {trip['name']} ({trip['car']})
+        <div class='active-trip-box'>
+            <h3>⚠️ TRIP ACTIVE ⚠️</h3>
+            Driver: {trip['name']}<br>
+            Car: {u['car']}<br>
+            Start Amount: {trip['start']}
         </div>
     """, unsafe_allow_html=True)
     
@@ -224,9 +243,9 @@ elif st.session_state.step == "END_PROMPT":
 
 elif st.session_state.step == "END_FORM":
     u = driver_info[st.session_state.u_id]
-    st.markdown(f"<div style='text-align:center; margin-bottom:10px;'>End Session for: <b>{u['name']}</b></div>", unsafe_allow_html=True)
+    st.markdown(f"<h4 style='text-align:center'>Closing: {u['name']}</h4>", unsafe_allow_html=True)
 
-    e_amt = st.number_input("END ID AMOUNT", value=None, placeholder="Enter End Amount")
+    e_amt = st.number_input("END ID AMOUNT", value=None, placeholder="Enter Amount")
     cash = st.number_input("CASH IN HAND", value=None, placeholder="Enter Cash")
     bank = st.number_input("BANK DEPOSIT", value=None, placeholder="Enter Bank")
 
@@ -256,7 +275,7 @@ elif st.session_state.step == "END_FORM":
             st.session_state.step = "RECEIPT"
             st.rerun()
         else:
-            st.warning("Please fill all fields")
+            st.warning("Fill all fields")
 
 elif st.session_state.step == "RECEIPT":
     res = st.session_state.res
