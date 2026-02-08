@@ -35,10 +35,8 @@ def load_all_data():
     
     drivers = {}
     for r in d_records:
-        # Columns handling
         d_id = str(r.get('ID#') or r.get('ID') or r.get('id') or '').strip()
         name = str(r.get('Driver Name') or r.get('Name') or '').strip()
-        # Specific check for "Car Number" as per your sheet
         car = str(r.get('Car Number') or r.get('Car#') or r.get('Car') or '').strip()
         
         if d_id:
@@ -52,9 +50,8 @@ def load_all_data():
 
 # --- LOGIC HELPER FUNCTIONS ---
 def get_pending_status(m_data, driver_ids):
-    # Check kon kon pending hai
     pending_list = {}
-    for idx, row in enumerate(m_data[5:], start=6): # Row 6 se data start
+    for idx, row in enumerate(m_data[5:], start=6): 
         if len(row) > 14:
             d_id = str(row[1]).strip()
             status = str(row[14])
@@ -63,7 +60,7 @@ def get_pending_status(m_data, driver_ids):
                     "row": idx,
                     "name": row[2],
                     "car": row[3],
-                    "start": row[5] # Col F
+                    "start": row[5]
                 }
     return pending_list
 
@@ -90,16 +87,13 @@ def get_totals(m_data, driver_ids):
     return stats
 
 def get_next_sr_and_row(m_data):
-    # Find last Sr# to continue numbering correctly
     max_sr = 0
-    last_row_idx = 5 # Header is at index 4 (Row 5), so data starts index 5
-    
+    last_row_idx = 5 
     for i, row in enumerate(m_data[5:], start=6):
         if row[0].strip().isdigit():
             max_sr = max(max_sr, int(row[0]))
-        if row[1].strip(): # If ID column has data
+        if row[1].strip():
             last_row_idx = i
-            
     return max_sr + 1, last_row_idx + 1
 
 # --- CSS STYLING ---
@@ -119,12 +113,24 @@ st.markdown("""
     /* Input Fields */
     input { background: #111 !important; color: #fff !important; border: 1px solid #333 !important; text-align: center; font-size: 20px !important; }
     
-    /* Buttons */
-    .stButton > button {
-        width: 100%; border: 1px solid #00ff41; background: #000; color: #00ff41;
+    /* NORMAL GREEN BUTTONS (Secondary) */
+    div[data-testid="stButton"] > button[kind="secondary"] {
+        width: 100%; border: 2px solid #00ff41; background: #000; color: #00ff41;
         font-weight: bold; padding: 15px; font-size: 18px;
     }
-    .stButton > button:hover { background: #00ff41; color: #000; }
+    div[data-testid="stButton"] > button[kind="secondary"]:hover {
+        background: #00ff41; color: #000;
+    }
+
+    /* ACTIVE RED BUTTONS (Primary) */
+    div[data-testid="stButton"] > button[kind="primary"] {
+        width: 100%; border: 2px solid #ff4444 !important; background: #000 !important; color: #ff4444 !important;
+        font-weight: bold; padding: 15px; font-size: 18px;
+        box-shadow: 0 0 15px #ff4444;
+    }
+    div[data-testid="stButton"] > button[kind="primary"]:hover {
+        background: #ff4444 !important; color: #000 !important;
+    }
     
     /* Info Helpers */
     .last-val-text { text-align: center; color: #888; font-size: 14px; margin-bottom: 5px; }
@@ -164,27 +170,52 @@ if 'step' not in st.session_state: st.session_state.step = "SELECT_ID"
 if st.session_state.step == "SELECT_ID":
     st.markdown("<h3 style='text-align:center'>SELECT DRIVER</h3>", unsafe_allow_html=True)
     
-    # Separate Active vs Available for better visibility
+    # Grid of Drivers
     cols = st.columns(3)
     for i, d_id in enumerate(driver_info.keys()):
         with cols[i % 3]:
-            # Button Text Logic
-            if d_id in pending_drivers:
-                btn_label = f"{d_id} 🔴" # Active Indicator
-                # Red styling hack using help text to identify or just reliance on label
-            else:
-                btn_label = d_id
+            # RED BORDER LOGIC:
+            # Agar driver pending hai to hum `type="primary"` use karenge jo CSS mein RED defined hai
+            # Agar free hai to `type="secondary"` jo GREEN defined hai
             
-            if st.button(btn_label):
+            is_active = d_id in pending_drivers
+            btn_type = "primary" if is_active else "secondary"
+            btn_label = f"{d_id}" 
+            
+            if st.button(btn_label, type=btn_type, key=f"btn_{d_id}"):
                 st.session_state.u_id = d_id
                 
-                if d_id in pending_drivers:
+                if is_active:
                     st.session_state.p_trip = pending_drivers[d_id]
                     st.session_state.step = "END_PROMPT"
                 else:
                     st.session_state.last_closed = get_last_wallet(d_id, m_data)
                     st.session_state.step = "START_TRIP"
                 st.rerun()
+
+    # --- ADD NEW DRIVER SECTION ---
+    st.markdown("---")
+    with st.expander("➕ ADD NEW DRIVER"):
+        new_id = st.text_input("New Driver ID", placeholder="e.g 1234")
+        new_name = st.text_input("Driver Name", placeholder="Name")
+        new_car = st.text_input("Car Number", placeholder="Car No")
+        
+        if st.button("SAVE NEW DRIVER"):
+            if new_id and new_name and new_car:
+                try:
+                    client = get_client()
+                    d_sheet = get_sheet(client, "Driver Data")
+                    # Append to Driver Data Sheet
+                    d_sheet.append_row([new_id, new_name, new_car])
+                    st.success(f"Driver {new_name} Added!")
+                    st.cache_data.clear() # Clear cache taake foran list mein show ho
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error saving: {e}")
+            else:
+                st.warning("All fields required")
+
 
 elif st.session_state.step == "START_TRIP":
     u = driver_info[st.session_state.u_id]
@@ -208,12 +239,8 @@ elif st.session_state.step == "START_TRIP":
             
             client = get_client()
             sheet = get_sheet(client, "Management")
-            
-            # Correct Sr# and Row Index
             next_sr, r_idx = get_next_sr_and_row(m_data)
             
-            # Row Structure
-            # A=Sr, B=ID, C=Driver, D=Car, E=Date, F=StartID, G=EndID, H=Oil, I=StartT, J=EndT, K=IDAmt, L=MyAcc, M=Hand, N=Total, O=Status
             row_data = [
                 next_sr, st.session_state.u_id, u['name'], u['car'],
                 datetime.now().strftime("%m/%d/%Y"), s_amt, "", oil_val,
